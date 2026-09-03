@@ -1791,10 +1791,19 @@ function pad(t){
 /* Gamme pentatonique majeure — l'ossature mélodique. */
 const PENTA=[523.25,587.33,698.46,783.99,1046.50];
 function playIgnition(offset){
-  const c=audio();if(!c||!sndOn||sndDone)return;
+  const c=audio();
+  if(!c||!sndOn||sndDone)return;
+  /* Tant que le navigateur n'a pas autorisé la lecture, le contexte
+     reste suspendu : programmer les notes maintenant les perdrait, et
+     marquer la séquence comme jouée empêcherait toute reprise après
+     le premier geste. On sort donc sans rien consommer. */
+  if(c.state!=='running')return;
   sndDone=true;
-  const t0=c.currentTime+0.05;
   const o=offset||0;
+  /* Geste tardif : la fenêtre de la séquence est passée. Plutôt que
+     de rester muet, on joue une version resserrée de la signature. */
+  if(o>2.4){ playCondensed(); return; }
+  const t0=c.currentTime+0.05;
   const at=function(x){return t0+Math.max(0,x-o);};
   if(o<0.15)drum(at(0.10),0.36);                       // amorçage du noyau
   if(o<1.9)sweep(at(0.28),1.7);                        // floraison de la trame
@@ -1810,16 +1819,35 @@ function playIgnition(offset){
   if(o<2.6)pad(at(2.5));                               // nappe d'ouverture
   if(o<3.0)kalimba(at(2.95),PENTA[3],0.08);            // la porte s'offre
 }
+/* Signature resserrée, pour un son déclenché après coup. */
+function playCondensed(){
+  const c=audio();if(!c||c.state!=='running')return;
+  const t=c.currentTime+0.04;
+  drum(t,0.34);
+  sweep(t+0.02,1.1);
+  PENTA.forEach(function(f,i){ kalimba(t+0.18+i*0.09,f,0.12); });
+  kalimba(t+0.72,PENTA[4],0.15);
+  pad(t+0.8);
+}
+
 /* Joué au moment où l'on franchit l'emblème, pas avant. */
 function entryChime(){
   const c=audio();if(!c||!sndOn)return;
-  try{ if(c.state==='suspended')c.resume(); }catch(e){}
-  const t=c.currentTime+0.02;
-  drum(t,0.3);
-  sweep(t+0.04,0.85);
-  kalimba(t+0.06,PENTA[0]*2,0.15);
-  kalimba(t+0.15,PENTA[2]*2,0.11);
-  kalimba(t+0.26,PENTA[4]*2,0.08);
+  const play=function(){
+    if(c.state!=='running')return;
+    const t=c.currentTime+0.02;
+    drum(t,0.3);
+    sweep(t+0.04,0.85);
+    kalimba(t+0.06,PENTA[0]*2,0.15);
+    kalimba(t+0.15,PENTA[2]*2,0.11);
+    kalimba(t+0.26,PENTA[4]*2,0.08);
+  };
+  if(c.state==='running'){play();return;}
+  try{
+    const p=c.resume();
+    if(p&&p.then)p.then(play).catch(function(){});
+    else play();
+  }catch(e){}
 }
 function armSound(){
   const btn=document.getElementById('bsnd');
@@ -1828,31 +1856,38 @@ function armSound(){
   /* L'état doit être relevé AVANT toute tentative de reprise :
      appeler resume() peut le faire basculer, et l'on perdrait
      l'information qu'un geste de l'utilisateur reste nécessaire. */
-  const blocked=(c.state==='suspended');
   const fire=function(){
-    if(btn)btn.classList.remove('pending');
     playIgnition((Date.now()-bootT0)/1000);
+    if(sndDone&&btn)btn.classList.remove('pending');
   };
   const tryPlay=function(){
-    if(c.state==='suspended'){
+    if(c.state==='running'){ fire(); return; }
+    try{
       const p=c.resume();
+      /* Certains navigateurs résolvent la promesse sans pour autant
+         relancer le contexte : on revérifie l'état avant de jouer. */
       if(p&&p.then)p.then(fire).catch(function(){});
       else fire();
-    } else fire();
+    }catch(e){}
   };
-  if(blocked&&btn)btn.classList.add('pending');
   tryPlay();
-  if(blocked){
-    /* Filet de sécurité : si la reprise automatique est refusée, le
-       premier contact relance la séquence, calée sur le temps écoulé. */
-    const once=function(){
-      document.removeEventListener('pointerdown',once,true);
-      document.removeEventListener('keydown',once,true);
-      if(!sndDone)tryPlay();
-      if(btn)btn.classList.remove('pending');
+  if(!sndDone){
+    if(btn)btn.classList.add('pending');
+    /* Le filet reste armé tant que la séquence n'est pas sortie :
+       sur une page ouverte à froid, aucun geste n'a encore eu lieu et
+       la lecture automatique est systématiquement refusée. */
+    const onGesture=function(){
+      tryPlay();
+      if(sndDone){
+        document.removeEventListener('pointerdown',onGesture,true);
+        document.removeEventListener('touchstart',onGesture,true);
+        document.removeEventListener('keydown',onGesture,true);
+        if(btn)btn.classList.remove('pending');
+      }
     };
-    document.addEventListener('pointerdown',once,true);
-    document.addEventListener('keydown',once,true);
+    document.addEventListener('pointerdown',onGesture,true);
+    document.addEventListener('touchstart',onGesture,true);
+    document.addEventListener('keydown',onGesture,true);
   }
 }
 
